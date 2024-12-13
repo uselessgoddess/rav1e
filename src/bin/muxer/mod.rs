@@ -8,7 +8,7 @@
 // PATENTS file, you can obtain it at www.aomedia.org/license/patent.
 
 mod ivf;
-use self::ivf::IvfMuxer;
+pub use self::ivf::IvfMuxer;
 
 mod y4m;
 pub use self::y4m::write_y4m_frame;
@@ -32,30 +32,3 @@ pub trait Muxer: Send {
   fn flush(&mut self) -> io::Result<()>;
 }
 
-pub fn create_muxer<P: AsRef<Path>>(
-  path: P, overwrite: bool,
-) -> Result<Box<dyn Muxer + Send>, CliError> {
-  if !overwrite {
-    IvfMuxer::check_file(path.as_ref())?;
-  }
-
-  if let Some(path) = path.as_ref().to_str() {
-    if path == "-" {
-      return IvfMuxer::open(path);
-    }
-  }
-
-  let ext = path
-    .as_ref()
-    .extension()
-    .and_then(OsStr::to_str)
-    .map(str::to_lowercase)
-    .unwrap_or_else(|| "ivf".into());
-
-  match &ext[..] {
-    "ivf" => IvfMuxer::open(path),
-    _e => {
-      panic!("{ext} is not a supported extension, please change to .ivf");
-    }
-  }
-}

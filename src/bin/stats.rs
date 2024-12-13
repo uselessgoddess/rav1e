@@ -76,7 +76,7 @@ pub struct ProgressInfo {
   // Frame rate of the video
   frame_rate: Rational,
   // The length of the whole video, in frames, if known
-  total_frames: Option<usize>,
+  pub(crate) total_frames: Option<usize>,
   // The time the encode was started
   time_started: Instant,
   // List of frames encoded so far

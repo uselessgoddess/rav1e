@@ -18,11 +18,11 @@ use std::io;
 use std::io::Write;
 use std::path::Path;
 
-pub struct IvfMuxer {
-  output: Box<dyn Write + Send>,
+pub struct IvfMuxer<T: Write + Send> {
+  pub output: T,
 }
 
-impl Muxer for IvfMuxer {
+impl<T: Write + Send> Muxer for IvfMuxer<T> {
   fn write_header(
     &mut self, width: usize, height: usize, framerate_num: usize,
     framerate_den: usize,
@@ -61,7 +61,7 @@ cfg_if::cfg_if! {
   }
 }
 
-impl IvfMuxer {
+impl<T: Write + Send> IvfMuxer<T> {
   pub fn check_file<P: AsRef<Path>>(path: P) -> Result<(), CliError> {
     if is_file(path.as_ref()) {
       eprint!(
@@ -81,20 +81,5 @@ impl IvfMuxer {
       };
     }
     Ok(())
-  }
-
-  pub fn open<P: AsRef<Path>>(
-    path: P,
-  ) -> Result<Box<dyn Muxer + Send>, CliError> {
-    let ivf = IvfMuxer {
-      output: match path.as_ref().to_str() {
-        Some("-") => Box::new(std::io::stdout()),
-        _ => Box::new(
-          File::create(path)
-            .map_err(|e| e.context("Cannot open output file"))?,
-        ),
-      },
-    };
-    Ok(Box::new(ivf))
   }
 }

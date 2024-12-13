@@ -20,7 +20,6 @@ readme = "README.md"
 repository = "https://github.com/xiph/rav1e/"
 autobenches = false
 autobins = false
-default-run = "rav1e"
 
 [features]
 unstable = []
@@ -57,7 +56,6 @@ tracing = [
 ]
 scenechange = []
 serialize = [
-  "serde",
   "toml",
   "v_frame/serialize",
   "serde-big-array",
@@ -77,6 +75,12 @@ wasm = ["wasm-bindgen"]
 dump_lookahead_data = ["byteorder", "image"]
 
 [dependencies]
+rkyv = { version = "0.8.9" }
+axum = { version = "0.7.9", features = ["macros"] }
+tokio = { version = "1.41.1", features = ["full"] }
+futures = { version = "0.3.31" }
+anyhow = { version = "1.0.93" }
+# rav1e
 arg_enum_proc_macro = "0.3.4"
 bitstream-io = "~2.3.0"
 cfg-if = "1.0"
@@ -94,7 +98,7 @@ num-traits = "0.2"
 num-derive = "0.4"
 paste = "1.0"
 noop_proc_macro = "0.3.0"
-serde = { version = "1.0", features = ["derive"], optional = true }
+serde = { version = "1.0", features = ["derive"] }
 dav1d-sys = { version = "0.7.0", package = "libdav1d-sys", optional = true }
 aom-sys = { version = "0.3.3", optional = true }
 scan_fmt = { version = "0.2.6", optional = true, default-features = false }
@@ -122,6 +126,7 @@ tracing-subscriber = { version = "0.3.18", optional = true }
 tracing-chrome = { version = "0.7.1", optional = true }
 tracing = { version = "0.1.40", optional = true }
 aligned-vec = "0.6.0"
+bytes = "1.9.0"
 
 [dependencies.image]
 version = "0.25.0"
@@ -179,12 +184,8 @@ check-cfg = [
 ]
 
 [[bin]]
-name = "rav1e"
-required-features = ["binaries"]
-bench = false
-
-[[bin]]
-name = "rav1e-ch"
+name = "av1r"
+path = "src/bin/av1r.rs"
 required-features = ["binaries", "channel-api", "unstable"]
 bench = false
 

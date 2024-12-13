@@ -8,7 +8,7 @@
 // PATENTS file, you can obtain it at www.aomedia.org/license/patent.
 
 use crate::error::*;
-use crate::muxer::{create_muxer, Muxer};
+use crate::muxer::Muxer;
 use crate::stats::MetricsEnabled;
 use clap::builder::styling::AnsiColor;
 use clap::builder::Styles;
@@ -459,7 +459,7 @@ pub fn parse_cli() -> Result<ParsedCliOptions, CliError> {
           .map_err(|e| e.context("Cannot open input file"))?,
       ) as Box<dyn Read + Send>,
     },
-    output: create_muxer(&matches.output, matches.overwrite)?,
+    output: /*  */ todo!(),
     rec,
   };
 
