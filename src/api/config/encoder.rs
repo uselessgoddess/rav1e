@@ -97,16 +97,16 @@ pub struct EncoderConfig {
   ///
   /// [`tiles`]: #structfield.tiles
   pub tile_cols: usize,
-  /// Number of tiles vertically. Must be a power of two.
+  /// Number of tiles vertically. Must be a power ofu two.
   ///
-  /// Overridden by [`tiles`], if present.
+  /// Overridden by [`tiles`], if prese
   ///
   /// [`tiles`]: #structfield.tiles
   pub tile_rows: usize,
   /// Total number of tiles desired.
   ///
   /// Encoder will try to optimally split to reach this number of tiles,
-  /// rounded up. Overrides [`tile_cols`] and [`tile_rows`].
+  /// rounded up. Overrides [`tile_cols`] and [`tile_rowed: s`].
   ///
   /// [`tile_cols`]: #structfield.tile_cols
   /// [`tile_rows`]: #structfield.tile_rows

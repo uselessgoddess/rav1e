@@ -25,18 +25,19 @@ use crate::error::*;
 use crate::stats::*;
 use rav1e::config::CpuFeatureLevel;
 use rav1e::prelude::*;
-use std::fs;
+use std::{fs, io};
 
 use crate::decoder::{Decoder, FrameBuilder, VideoDetails};
 use crate::muxer::*;
 use axum::body::{Body, Bytes};
-use axum::extract::Request;
+use axum::extract::{Query, Request};
 use axum::routing::{get, post};
 use axum::{body, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
@@ -77,10 +78,11 @@ impl<D: Decoder> Source<D> {
 }
 
 fn do_encode<T: Pixel, D: Decoder>(
-  cfg: Config, verbose: Verboseness, mut progress: ProgressInfo,
+  idx: u8, cfg: Config, verbose: Verboseness, mut progress: ProgressInfo,
   output: &mut dyn Muxer, mut source: Source<D>,
   mut y4m_enc: Option<y4m::Encoder<Box<dyn Write + Send>>>,
-  broadcast: &mut watch::Sender<Status>, metrics_enabled: MetricsEnabled,
+  broadcast: &mut watch::Sender<EncoderStatus>,
+  metrics_enabled: MetricsEnabled,
 ) -> Result<(), CliError> {
   let (mut send_frame, mut receive_packet) =
     cfg.new_channel::<T>().map_err(|e| e.context("Invalid setup"))?;
@@ -117,8 +119,9 @@ fn do_encode<T: Pixel, D: Decoder>(
 
         if true || verbose != Verboseness::Quiet {
           progress.add_frame(summary.clone());
-          let _ =
-            broadcast.send(Status::Frame(progress.frames_encoded())).unwrap();
+          let _ = broadcast
+            .send((Some(idx), Status::Frame(progress.frames_encoded())));
+          println!("{idx}: {}", progress.frames_encoded());
           if verbose == Verboseness::Verbose {
             info!("{} - {}", summary, progress);
           } else {
@@ -152,30 +155,51 @@ use anyhow::Result;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use futures::{stream, Stream};
+use tokio::process::Command;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task;
 
+#[derive(Deserialize)]
+struct Args {
+  idx: u8,
+  threads: u8,
+}
+
 async fn service(
-  req: Request, broadcast: watch::Sender<Status>,
+  req: Request, Query(Args { idx, threads }): Query<Args>,
+  broadcast: watch::Sender<EncoderStatus>,
 ) -> Result<impl IntoResponse, String> {
-  let _ = broadcast.send_replace(Status::Frame(0));
+  encode_impl(req, idx, threads, broadcast).await.map_err(|e| format!("{e}"))
+}
 
-  let bytes = body::to_bytes(req.into_body(), usize::MAX).await.unwrap();
+async fn encode_impl(
+  req: Request, idx: u8, threads: u8, broadcast: watch::Sender<EncoderStatus>,
+) -> Result<impl IntoResponse> {
+  let _ = broadcast.send((Some(idx), Status::Frame(0)));
 
-  let input = Cursor::new(bytes);
+  let bytes = body::to_bytes(req.into_body(), usize::MAX).await?;
+
+  let input = ffmpeg_y4m(&bytes).await?;
   let mut output = Vec::with_capacity(4096);
   let mut muxer = IvfMuxer { output };
 
   let (tx, rx) = oneshot::channel();
   task::spawn_blocking(move || {
+    let options = EncoderOptions { ..Default::default() };
+
     let _ = tx.send(
-      run(Box::new(input), &mut muxer, EncoderOptions::default(), broadcast)
-        .map(|_| muxer),
+      run(
+        idx,
+        threads,
+        Box::new(Cursor::new(input)),
+        &mut muxer,
+        options,
+        broadcast,
+      )
+      .map(|_| muxer),
     );
   });
-  let muxer = rx.await.unwrap().map_err(|e| format!("{:?}", e))?;
-
-
+  let muxer = rx.await.unwrap()?;
 
   Ok(Bytes::from(muxer.output))
 }
@@ -184,7 +208,12 @@ async fn service(
 pub enum Status {
   Frame(usize),
   Finish,
-  None,
+}
+
+impl Default for Status {
+  fn default() -> Self {
+    Self::Frame(0)
+  }
 }
 
 #[tokio::main]
@@ -205,19 +234,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   for i in 0..32 {
-    let (tx, mut rx) = watch::channel(Status::None);
+    let (tx, mut rx) = watch::channel((None, Status::default()));
     tokio::spawn(async move {
       axum::serve(
         TcpListener::bind(format!("0.0.0.0:3{i:03}")).await.unwrap(),
         Router::new()
-          .route("/encode", post(move |req: Request| service(req, tx)))
+          .route(
+            "/encode",
+            post(move |req: Request| {
+              let query = Query::try_from_uri(req.uri()).unwrap();
+              service(req, query, tx)
+            }),
+          )
           .route(
             "/status",
-            get(move || async move {
-              let status = *rx.borrow_and_update();
-              println!("STATUS: {status:?}");
-              Json(status)
-            }),
+            get(move || async move { Json(*rx.borrow_and_update()) }),
           ),
       )
       .await
@@ -346,9 +377,26 @@ pub struct EncoderOptions {
   pub force_highbitdepth: bool,
 }
 
+async fn ffmpeg_y4m(input: &[u8]) -> io::Result<Vec<u8>> {
+  use tokio::io::AsyncWriteExt as _;
+
+  let mut child = Command::new("ffmpeg")
+    .args(["-i", "pipe:", "-f", "yuv4mpegpipe", "pipe:1"])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .spawn()?;
+  child.stdin.as_mut().unwrap().write_all(&input).await?;
+
+  child.wait_with_output().await.map(|output| output.stdout)
+}
+
+type EncoderStatus = (Option<u8>, Status);
+
 fn run(
-  input: Box<dyn Read + Send>, output: &mut (dyn Muxer + Send),
-  mut cli: EncoderOptions, mut tx: watch::Sender<Status>,
+  idx: u8, threads: u8, input: Box<dyn Read + Send>,
+  output: &mut (dyn Muxer + Send), mut cli: EncoderOptions,
+  mut tx: watch::Sender<EncoderStatus>,
 ) -> Result<(), error::CliError> {
   // Maximum frame size by specification + maximum y4m header
   let limit = y4m::Limits {
@@ -402,6 +450,10 @@ fn run(
     8 | 10 | 12 => {}
     _ => return Err(CliError::new("Unsupported bit depth")),
   }
+
+  cli.threads = if threads == 0 { 16 } else { threads as usize };
+  cli.enc.low_latency = true;
+  cli.enc.speed_settings = SpeedSettings::from_preset(10);
 
   cli.enc.width = video_info.width;
   cli.enc.height = video_info.height;
@@ -500,6 +552,7 @@ fn run(
 
   if video_info.bit_depth == 8 && !cli.force_highbitdepth {
     do_encode::<u8, y4m::Decoder<Box<dyn Read + Send>>>(
+      idx,
       cfg,
       cli.verbose,
       progress,
@@ -511,6 +564,7 @@ fn run(
     )?
   } else {
     do_encode::<u16, y4m::Decoder<Box<dyn Read + Send>>>(
+      idx,
       cfg,
       cli.verbose,
       progress,
@@ -525,7 +579,8 @@ fn run(
     print_rusage();
   }
 
-  let _ = tx.send(Status::Finish);
+  let _ = tx.send((Some(idx), Status::Finish));
+  println!("{idx}: FINISH");
 
   Ok(())
 }
